@@ -45,6 +45,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -240,6 +241,20 @@ public class SysOssServiceImpl implements ISysOssService, OssService {
     public OssDTO uploadFile(MultipartFile file) {
         SysOssVo sysOssVo = upload(file);
         return BeanUtil.toBean(sysOssVo, OssDTO.class);
+    }
+
+    @Override
+    public InputStream getObjectContent(Long ossId) {
+        SysOssVo sysOss = SpringUtils.getAopProxy(this).getById(ossId);
+        if (ObjectUtil.isNull(sysOss)) {
+            throw new ServiceException("文件数据不存在");
+        }
+        OssClient storage = OssFactory.instance(sysOss.getService());
+        try {
+            return storage.getObjectContent(sysOss.getFileName());
+        } catch (IOException e) {
+            throw new ServiceException("文件读取失败: " + e.getMessage());
+        }
     }
 
     /**

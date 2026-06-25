@@ -38,7 +38,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
 
-import java.net.URL;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -175,7 +174,7 @@ public class KnowledgeAttachServiceImpl implements IKnowledgeAttachService {
             OssDTO ossDTO = ossDTOs.get(0);
             String content;
             ResourceLoader resourceLoader = resourceLoaderFactory.getLoaderByFileType(attach.getType());
-            try (InputStream inputStream = new URL(ossDTO.getUrl()).openStream()) {
+            try (InputStream inputStream = ossService.getObjectContent(attach.getOssId())) {
                 content = resourceLoader.getContent(inputStream);
             }
             List<String> chunkList = resourceLoader.getChunkList(content, String.valueOf(knowledgeId));
