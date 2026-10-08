@@ -20,6 +20,39 @@ server:
       # 阻塞任务线程池, 当执行类似servlet请求阻塞操作, undertow会从这个线程池中取得线程,它的值设置取决于系统的负载
       worker: 256
 
+# execute_process 只能经由固定镜像的 Docker OS sandbox；缺任一配置均 fail closed。
+coding:
+  harness:
+    journal:
+      # Operator HTML projection is opt-in; production paths must be chosen by deployment config.
+      enabled: ${CODING_HARNESS_JOURNAL_ENABLED:false}
+      output-directory: ${CODING_HARNESS_JOURNAL_OUTPUT_DIRECTORY:./data/coding-harness-journal}
+    budget:
+      # 模型回合上限；工具额度按每回合最多 3 次保持同比例，避免工具预算先于回合耗尽。
+      # No task iteration or wall-time cutoff; context compaction supports continued work.
+      # Optional cumulative spending ceilings (0 = disabled).
+      max-tool-calls: 0
+      max-input-tokens: 0
+      max-output-tokens: 0
+    tools:
+      execute-process:
+        enabled: ${CODING_HARNESS_EXECUTE_PROCESS_ENABLED:false}
+        sandbox:
+          # 必须是宿主 Docker CLI 的绝对路径；不会搜索或继承宿主 PATH/HOME。
+          docker-executable: ${CODING_HARNESS_DOCKER_EXECUTABLE:}
+          # 对 CLI 文件内容做每次控制调用前复核，不能只信文件名或绝对路径。
+          docker-executable-sha256: ${CODING_HARNESS_DOCKER_EXECUTABLE_SHA256:}
+          # 必须是绝对、无链接且始终为空的专用目录，阻断宿主 config.json/proxy/credential helper。
+          docker-config-directory: ${CODING_HARNESS_DOCKER_CONFIG_DIRECTORY:}
+          # 只接受平台本地 Docker Engine（Windows named pipe / Unix socket），拒绝远端 context。
+          docker-host: ${CODING_HARNESS_DOCKER_HOST:}
+          # 仅接受 evaluator 批准的本地 sha256:<64 hex> image ID，永不 pull/build。
+          image: ${CODING_HARNESS_SANDBOX_IMAGE:}
+
+--- # 小程序对话 WebSocket 兜底默认模型（前端未传 model 且无智能体绑定时使用）
+chat:
+  default-model: deepseek-v4-flash
+
 captcha:
   # 是否启用验证码校验
   enable: false
@@ -35,10 +68,19 @@ captcha:
 # 日志配置
 logging:
   level:
-    org.ruoyi: @logging.level@
+    org.ruoyi: ${LOGGING_LEVEL_ORG_RUOYI:info}
     org.springframework: warn
     org.mybatis.spring.mapper: error
     org.apache.fury: warn
+    # MCP traffic/stdout may contain tool arguments, results or credentials.
+    MCP: "OFF"
+    dev.langchain4j.mcp: "OFF"
+    dev.langchain4j.mcp.McpToolProvider: "OFF"
+    dev.langchain4j.mcp.client.logging.DefaultMcpLogMessageHandler: "OFF"
+    dev.langchain4j.mcp.client.transport.stdio.StdioMcpTransport: "OFF"
+    dev.langchain4j.mcp.client.transport.stdio.ProcessStderrHandler: "OFF"
+    dev.langchain4j.mcp.transport.stdio.JsonRpcIoHandler: "ERROR"
+    dev.langchain4j.mcp.client.transport.http.StreamableHttpMcpTransport: "OFF"
   config: classpath:logback-plus.xml
 
 # 用户配置
@@ -75,7 +117,7 @@ spring:
     # 国际化资源文件路径
     basename: i18n/messages
   profiles:
-    active: @profiles.active@
+    active: ${SPRING_PROFILES_ACTIVE:dev}
   # 文件上传
   servlet:
     multipart:
@@ -141,6 +183,9 @@ tenant:
     - sys_client
     - sys_oss_config
     - flow_spel
+    # 链路追踪监控表：运维需跨租户全局查看，且 trace_node 在异步线程写入、租户上下文不传播，故排除租户过滤
+    - trace_run
+    - trace_node
 
 # MyBatisPlus配置
 # https://baomidou.com/config/
@@ -226,6 +271,18 @@ xss:
   # 排除链接
   excludeUrls:
     - /system/notice
+    # Coding prompts contain source text (for example TypeScript <T>), rendered as escaped Markdown.
+    - /coding/harness/sessions/*/runs
+    - /coding/harness/sessions/*/runs/*/inputs
+
+--- # 链路追踪配置
+trace:
+  # 是否启用链路追踪，默认 true
+  # 关闭后所有埋点代码会直接透传业务逻辑，不写库、不创建上下文，零性能开销
+  enabled: true
+  payload:
+    # 错误信息最大字符长度（格式: "异常类名: 异常消息"），超过部分会被截断丢弃
+    max-error-length: 1000
 
 --- # 分布式锁 lock4j 全局配置
 lock4j:
@@ -263,7 +320,7 @@ websocket:
 --- # 演示模式配置
 demo:
   # 是否开启演示模式（开启后所有写操作将被拦截）
-  enabled: false
+  enabled: ${DEMO_ENABLED:false}
   # 提示消息
   message: "演示模式，不允许操作"
   # 排除的路径（这些路径不受演示模式限制）
@@ -296,11 +353,12 @@ warm-flow:
 vector-store:
   # 向量存储类型 可选(weaviate/milvus/qdrant)
   # 如需修改向量库类型，请修改此配置值!
-  type: milvus
+  # 注意：需与 docker-compose 实际部署的向量库保持一致（当前 compose 内置 weaviate，映射端口 28080）
+  type: weaviate
   # Weaviate配置
   weaviate:
     protocol: http
-    host: 127.0.0.1:6038
+    host: 127.0.0.1:28080
     classname: LocalKnowledge
   # Milvus配置
   milvus:
@@ -313,3 +371,48 @@ vector-store:
     collectionname: LocalKnowledge
     api-key:
     use-tls: false
+
+# 流程编排扩展节点
+workflow:
+  web-search:
+    zhipu:
+      # 推荐通过环境变量注入；为空时回退到模型管理中的 zhipu 厂商密钥
+      api-key: ${ZAI_API_KEY:}
+      base-url: ${ZHIPU_WEB_SEARCH_BASE_URL:https://open.bigmodel.cn/api/paas/v4/}
+      connect-timeout: ${ZHIPU_WEB_SEARCH_CONNECT_TIMEOUT:10}
+      read-timeout: ${ZHIPU_WEB_SEARCH_READ_TIMEOUT:30}
+
+# 短剧成片合成
+short-drama:
+  composition:
+    ffmpeg-path: ${FFMPEG_PATH:ffmpeg}
+    ffprobe-path: ${FFPROBE_PATH:ffprobe}
+    fps: ${SHORT_DRAMA_COMPOSITION_FPS:30}
+    audio-sample-rate: ${SHORT_DRAMA_COMPOSITION_AUDIO_SAMPLE_RATE:48000}
+    video-codec: ${SHORT_DRAMA_COMPOSITION_VIDEO_CODEC:libx264}
+    audio-codec: ${SHORT_DRAMA_COMPOSITION_AUDIO_CODEC:aac}
+    preset: ${SHORT_DRAMA_COMPOSITION_PRESET:medium}
+    crf: ${SHORT_DRAMA_COMPOSITION_CRF:20}
+    audio-bitrate: ${SHORT_DRAMA_COMPOSITION_AUDIO_BITRATE:192k}
+    max-clips: ${SHORT_DRAMA_COMPOSITION_MAX_CLIPS:100}
+    max-transition-seconds: ${SHORT_DRAMA_COMPOSITION_MAX_TRANSITION_SECONDS:2.0}
+    minimum-output-bytes: ${SHORT_DRAMA_COMPOSITION_MINIMUM_OUTPUT_BYTES:1024}
+    max-process-output-bytes: ${SHORT_DRAMA_COMPOSITION_MAX_PROCESS_OUTPUT_BYTES:1048576}
+    max-source-bytes: ${SHORT_DRAMA_COMPOSITION_MAX_SOURCE_BYTES:536870912}
+    max-total-source-bytes: ${SHORT_DRAMA_COMPOSITION_MAX_TOTAL_SOURCE_BYTES:2147483648}
+    probe-timeout: ${SHORT_DRAMA_COMPOSITION_PROBE_TIMEOUT:30s}
+    process-timeout: ${SHORT_DRAMA_COMPOSITION_PROCESS_TIMEOUT:30m}
+    job-stale-after: ${SHORT_DRAMA_COMPOSITION_JOB_STALE_AFTER:45m}
+    watermark-font-file: ${SHORT_DRAMA_COMPOSITION_WATERMARK_FONT_FILE:}
+    worker-core-size: ${SHORT_DRAMA_COMPOSITION_WORKER_CORE_SIZE:1}
+    worker-max-size: ${SHORT_DRAMA_COMPOSITION_WORKER_MAX_SIZE:2}
+    worker-queue-capacity: ${SHORT_DRAMA_COMPOSITION_WORKER_QUEUE_CAPACITY:8}
+    storage-mode: ${SHORT_DRAMA_COMPOSITION_STORAGE_MODE:local}
+    local-output-directory: ${SHORT_DRAMA_COMPOSITION_LOCAL_OUTPUT_DIRECTORY:logs/short-drama-compositions}
+    download:
+      connect-timeout: ${SHORT_DRAMA_DOWNLOAD_CONNECT_TIMEOUT:30s}
+      call-timeout: ${SHORT_DRAMA_DOWNLOAD_CALL_TIMEOUT:10m}
+      max-redirects: ${SHORT_DRAMA_DOWNLOAD_MAX_REDIRECTS:5}
+      # 生产环境建议配置为视频供应商或 OSS/CDN 域名，多个值用逗号分隔。
+      allowed-hosts: ${SHORT_DRAMA_DOWNLOAD_ALLOWED_HOSTS:}
+      fake-ip-allowed-hosts: ${SHORT_DRAMA_DOWNLOAD_FAKE_IP_ALLOWED_HOSTS:atlas-media.oss-us-west-1.aliyuncs.com,ark-acg-ap-southeast-1.tos-ap-southeast-1.volces.com}

@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -25,13 +26,25 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 public class EmbeddingModelFactory {
 
+    /**
+     * 厂商 providerCode → Spring Bean 名称映射
+     * 处理 providerCode 与 @Component 注册名不一致的情况
+     */
+    private static final Map<String, String> PROVIDER_BEAN_MAPPING = Map.of(
+            "qianwen", "alibailian"
+    );
+
     private final ApplicationContext applicationContext;
 
     private final IChatModelService chatModelService;
     private final EmbeddingModelListenerProvider embeddingModelListenerProvider;
 
     // 模型缓存，使用ConcurrentHashMap保证线程安全
-    private final Map<String, BaseEmbedModelService> modelCache = new ConcurrentHashMap<>();
+    private final Map<ModelCacheKey, CachedModel> modelCache = new ConcurrentHashMap<>();
+
+    private record ModelCacheKey(Long id, String modelName, String providerCode) { }
+
+    private record CachedModel(ChatModelVo configuration, BaseEmbedModelService model) { }
 
     /**
      * 创建嵌入模型实例
@@ -40,14 +53,22 @@ public class EmbeddingModelFactory {
      * @param embeddingModelName 嵌入模型名称
      */
     public BaseEmbedModelService createModel(String embeddingModelName) {
-        return modelCache.computeIfAbsent(embeddingModelName, name -> {
-            ChatModelVo modelConfig = chatModelService.selectModelByName(embeddingModelName);
-
-            if (modelConfig == null) {
-                throw new IllegalArgumentException("未找到模型配置，name=" + name);
+        // 即使命中缓存，也先读取当前配置并校验厂商状态。
+        ChatModelVo modelConfig = chatModelService.selectModelByName(embeddingModelName);
+        if (modelConfig == null) {
+            throw new IllegalArgumentException("未找到模型配置，name=" + embeddingModelName);
+        }
+        ModelCacheKey key = new ModelCacheKey(modelConfig.getId(),
+            modelConfig.getModelName(), modelConfig.getProviderCode());
+        return modelCache.compute(key, (ignored, cached) -> {
+            // ChatModelVo.equals deliberately excludes the secret, so compare it separately.
+            if (cached != null && modelConfig.equals(cached.configuration())
+                && Objects.equals(modelConfig.getApiKey(), cached.configuration().getApiKey())) {
+                return cached;
             }
-            return createModelInstance(modelConfig.getProviderCode(), modelConfig);
-        });
+            return new CachedModel(modelConfig,
+                createModelInstance(modelConfig.getProviderCode(), modelConfig));
+        }).model();
     }
 
     /**
@@ -77,13 +98,22 @@ public class EmbeddingModelFactory {
 
     /**
      * 刷新模型缓存
-     * 根据给定的嵌入模型ID从缓存中移除对应的模型
+     * 根据给定的嵌入模型ID解析模型名称后，从缓存中移除对应的模型
      *
      * @param embeddingModelId 嵌入模型的唯一标识ID
      */
     public void refreshModel(Long embeddingModelId) {
-        // 从模型缓存中移除指定ID的模型
-        modelCache.remove(embeddingModelId);
+        ChatModelVo modelConfig = chatModelService.queryById(embeddingModelId);
+        if (modelConfig != null) {
+            modelCache.keySet().removeIf(key -> embeddingModelId.equals(key.id()));
+        }
+    }
+
+    /**
+     * 按模型名称刷新缓存
+     */
+    public void refreshModelByName(String embeddingModelName) {
+        modelCache.keySet().removeIf(key -> embeddingModelName.equals(key.modelName()));
     }
 
     /**
@@ -107,8 +137,10 @@ public class EmbeddingModelFactory {
      */
     private BaseEmbedModelService createModelInstance(String factory, ChatModelVo config) {
         try {
+            // 解析实际的 Bean 名称（处理 providerCode 与 @Component 注册名不一致的情况）
+            String beanName = PROVIDER_BEAN_MAPPING.getOrDefault(factory, factory);
             // 从Spring上下文中获取模型实例
-            BaseEmbedModelService model = applicationContext.getBean(factory, BaseEmbedModelService.class);
+            BaseEmbedModelService model = applicationContext.getBean(beanName, BaseEmbedModelService.class);
             // 配置模型参数
             model.configure(config);
             // 增加嵌入模型监听器

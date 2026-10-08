@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Component("zhipuRerank")
+@org.springframework.context.annotation.Scope("prototype")
 public class ZhiPuRerankModelService implements RerankModelService {
 
     private final OkHttpClient okHttpClient;
@@ -88,7 +89,8 @@ public class ZhiPuRerankModelService implements RerankModelService {
         RequestBody body = RequestBody.create(jsonBody, MediaType.get("application/json"));
 
         // 生成智谱认证Token
-        String token = generateToken(chatModelVo.getApiKey());
+        String token = generateToken(
+            chatModelVo.getApiKey());
 
         // 智谱重排序固定端点路径
         String url = chatModelVo.getApiHost() + "/api/paas/v4/rerank";

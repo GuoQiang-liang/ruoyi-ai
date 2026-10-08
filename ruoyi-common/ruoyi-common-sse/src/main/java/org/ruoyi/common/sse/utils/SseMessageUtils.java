@@ -18,6 +18,7 @@ import org.ruoyi.common.sse.dto.SseMessageDto;
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public class SseMessageUtils {
 
+    private static final String SAFE_ERROR_MESSAGE = "请求处理失败，请稍后重试";
     private final static Boolean SSE_ENABLE = SpringUtils.getProperty("sse.enabled", Boolean.class, true);
     private static SseEmitterManager MANAGER;
 
@@ -94,6 +95,15 @@ public class SseMessageUtils {
     }
 
     /**
+     * 完成指定会话的SSE连接
+     *
+     * @param sessionId 会话ID
+     */
+    public static void completeConnection(String sessionId) {
+        MANAGER.disconnect(sessionId);
+    }
+
+    /**
      * 向指定的SSE会话发送结构化事件
      *
      * @param userId   要发送消息的用户id
@@ -107,6 +117,24 @@ public class SseMessageUtils {
     }
 
     /**
+     * 向指定会话发送结构化事件（通过 Redis 广播，跨实例可达）
+     *
+     * @param sessionId 会话ID
+     * @param eventDto  SSE事件对象
+     */
+    public static void sendEvent(String sessionId, SseEventDto eventDto) {
+        if (!isEnable() || sessionId == null) {
+            return;
+        }
+        // The producer normally owns this emitter. Do not race a Redis delivery against disconnect.
+        if (MANAGER.sendLocalEvent(sessionId, eventDto)) return;
+        SseMessageDto dto = new SseMessageDto();
+        dto.setSessionId(sessionId);
+        dto.setEventDto(eventDto);
+        MANAGER.publishMessage(dto);
+    }
+
+    /**
      * 发送内容事件
      *
      * @param userId  用户ID
@@ -114,6 +142,16 @@ public class SseMessageUtils {
      */
     public static void sendContent(Long userId, String content) {
         sendEvent(userId, SseEventDto.content(content));
+    }
+
+    /**
+     * 向指定会话发送内容事件
+     *
+     * @param sessionId 会话ID
+     * @param content   内容
+     */
+    public static void sendContent(String sessionId, String content) {
+        sendEvent(sessionId, SseEventDto.content(content));
     }
 
     /**
@@ -127,6 +165,16 @@ public class SseMessageUtils {
     }
 
     /**
+     * 向指定会话发送推理内容事件
+     *
+     * @param sessionId        会话ID
+     * @param reasoningContent 推理内容
+     */
+    public static void sendReasoning(String sessionId, String reasoningContent) {
+        sendEvent(sessionId, SseEventDto.reasoning(reasoningContent));
+    }
+
+    /**
      * 发送完成事件
      *
      * @param userId 用户ID
@@ -136,13 +184,39 @@ public class SseMessageUtils {
     }
 
     /**
+     * 向指定会话发送完成事件
+     *
+     * @param sessionId 会话ID
+     */
+    public static void sendDone(String sessionId) {
+        sendEvent(sessionId, SseEventDto.done());
+    }
+
+    /**
      * 发送错误事件
      *
      * @param userId 用户ID
      * @param error  错误信息
      */
     public static void sendError(Long userId, String error) {
-        sendEvent(userId, SseEventDto.error(error));
+        sendEvent(userId, SseEventDto.error(SAFE_ERROR_MESSAGE));
+    }
+
+    /**
+     * 向指定会话发送错误事件
+     *
+     * @param sessionId 会话ID
+     * @param error     错误信息
+     */
+    public static void sendError(String sessionId, String error) {
+        sendEvent(sessionId, SseEventDto.error(SAFE_ERROR_MESSAGE));
+    }
+
+    /** Final error only: unlike recoverable error events, this flushes and closes the stream. */
+    public static void sendErrorAndComplete(String sessionId, String error) {
+        SseEventDto terminal = SseEventDto.error(SAFE_ERROR_MESSAGE);
+        terminal.setDone(true);
+        sendEvent(sessionId, terminal);
     }
 
     /**

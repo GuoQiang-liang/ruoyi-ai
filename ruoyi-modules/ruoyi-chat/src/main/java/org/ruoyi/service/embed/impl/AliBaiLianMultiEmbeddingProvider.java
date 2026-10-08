@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
  * 实现了MultiModalEmbedModelService接口，提供文本、图像和视频的嵌入向量生成服务
  */
 @Component("bailianMultiModel")
+@org.springframework.context.annotation.Scope("prototype")
 @Slf4j
 public class AliBaiLianMultiEmbeddingProvider implements MultiModalEmbedModelService {
     private final OkHttpClient okHttpClient;
@@ -201,7 +202,8 @@ public class AliBaiLianMultiEmbeddingProvider implements MultiModalEmbedModelSer
 
         Request httpRequest = new Request.Builder()
                 .url(chatModelVo.getApiHost())
-                .addHeader("Authorization", "Bearer " + chatModelVo.getApiKey())
+                .addHeader("Authorization", "Bearer "
+                    + chatModelVo.getApiKey())
                 .post(body)
                 .build();
 

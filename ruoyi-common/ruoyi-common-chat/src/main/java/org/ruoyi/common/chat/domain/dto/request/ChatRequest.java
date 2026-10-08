@@ -1,6 +1,5 @@
 package org.ruoyi.common.chat.domain.dto.request;
 
-import com.alibaba.fastjson.annotation.JSONField;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import dev.langchain4j.data.message.ChatMessage;
@@ -21,8 +20,17 @@ import java.util.List;
 @Data
 public class ChatRequest {
 
-    @NotEmpty(message = "传入的模型不能为空")
+    /**
+     * 模型名称。
+     * 智能体模式下可缺省：传 agentId 时后端按智能体绑定的模型解析，此字段仅作回退。
+     */
     private String model;
+
+    /**
+     * 智能体ID。传入时后端按智能体配置解析模型/工具/技能/知识库/提示词/是否深度思考。
+     */
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long agentId;
 
     /**
      * 对话消息
@@ -36,16 +44,6 @@ public class ChatRequest {
     private WorkFlowRunner workFlowRunner;
 
     /**
-     * 人机交互信息体
-     */
-    private ReSumeRunner reSumeRunner;
-
-    /**
-     * 是否为人机交互用户继续输入
-     */
-    private Boolean isResume = false;
-
-    /**
      * 是否启用工作流
      */
     private Boolean enableWorkFlow = false;
@@ -54,7 +52,6 @@ public class ChatRequest {
      * 会话id
      */
     @JsonSerialize(using = ToStringSerializer.class)
-    @JSONField(serializeUsing = String.class)
     private Long sessionId;
 
     /**
@@ -71,13 +68,25 @@ public class ChatRequest {
      * 对话id(每个聊天窗口都不一样)
      */
     @JsonSerialize(using = ToStringSerializer.class)
-    @JSONField(serializeUsing = String.class)
     private Long uuid;
 
     /**
      * 是否启用深度思考
      */
     private Boolean enableThinking = false;
+
+    /**
+     * 是否回放上下文中已经存在的模型思考内容。
+     * 仅供需要在非思考动作轮中延续 DeepSeek 工具协议的内部调用使用。
+     */
+    private Boolean replayThinking = false;
+
+    /**
+     * Doubao-Seed-Evolving 思考等级（reasoning_effort）。
+     * 取值 none/minimal/low/medium/high/xhigh/max；null 表示不发送 Doubao 专属参数。
+     * 仅在 custom_api 供应商承载 Doubao 模型时使用，其他模型忽略此字段。
+     */
+    private String reasoningEffort;
 
     /**
      * 对话模型详情

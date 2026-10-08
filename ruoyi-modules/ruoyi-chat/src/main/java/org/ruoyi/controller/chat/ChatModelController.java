@@ -6,9 +6,15 @@ import lombok.RequiredArgsConstructor;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.constraints.*;
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import org.ruoyi.common.chat.service.chat.IChatModelService;
 import org.ruoyi.common.chat.domain.bo.chat.ChatModelBo;
+import org.ruoyi.common.chat.domain.bo.chat.ChatModelSelectQuery;
+import org.ruoyi.common.chat.domain.bo.chat.ModelBatchKeyBo;
+import org.ruoyi.common.chat.domain.vo.chat.ChatModelSelectVo;
 import org.ruoyi.common.chat.domain.vo.chat.ChatModelVo;
+import org.ruoyi.common.chat.domain.vo.chat.ChatModelDetailVo;
+import org.ruoyi.common.core.utils.StringUtils;
 import org.ruoyi.enums.ChatModeType;
 import org.ruoyi.enums.ModelType;
 import org.springframework.web.bind.annotation.*;
@@ -52,10 +58,19 @@ public class ChatModelController extends BaseController {
     /**
      * 查询用户聊天模型列表
      */
+    @SaCheckPermission(value = {"system:model:list", "coding:harness:use"}, mode = SaMode.OR)
     @GetMapping("/modelList")
-    public R<List<ChatModelVo>> modelList(ChatModelBo bo) {
-        bo.setCategory(ModelType.CHAT.getKey());
-        return R.ok(chatModelService.queryList(bo));
+    public R<List<ChatModelSelectVo>> modelList(ChatModelSelectQuery query) {
+        ChatModelBo internalQuery = new ChatModelBo();
+        if (query == null || StringUtils.isBlank(query.getCategory())) {
+            internalQuery.setCategory(ModelType.CHAT.getKey());
+        } else {
+            internalQuery.setCategory(query.getCategory());
+        }
+        if (query != null) internalQuery.setProviderCode(query.getProviderCode());
+        return R.ok(chatModelService.queryAvailableList(internalQuery).stream()
+            .map(ChatModelSelectVo::from)
+            .toList());
     }
 
     /**
@@ -77,7 +92,8 @@ public class ChatModelController extends BaseController {
      * 导出模型管理列表
      */
     @SaCheckPermission("system:model:export")
-    @Log(title = "模型管理", businessType = BusinessType.EXPORT)
+    @Log(title = "模型管理", businessType = BusinessType.EXPORT,
+        excludeParamNames = {"apiKey"})
     @PostMapping("/export")
     public void export(ChatModelBo bo, HttpServletResponse response) {
         List<ChatModelVo> list = chatModelService.queryList(bo);
@@ -91,16 +107,17 @@ public class ChatModelController extends BaseController {
      */
     @SaCheckPermission("system:model:query")
     @GetMapping("/{id}")
-    public R<ChatModelVo> getInfo(@NotNull(message = "主键不能为空")
+    public R<ChatModelDetailVo> getInfo(@NotNull(message = "主键不能为空")
                                      @PathVariable Long id) {
-        return R.ok(chatModelService.queryById(id));
+        return R.ok(ChatModelDetailVo.from(chatModelService.queryById(id)));
     }
 
     /**
      * 新增模型管理
      */
     @SaCheckPermission("system:model:add")
-    @Log(title = "模型管理", businessType = BusinessType.INSERT)
+    @Log(title = "模型管理", businessType = BusinessType.INSERT,
+        excludeParamNames = {"apiKey"})
     @RepeatSubmit()
     @PostMapping()
     public R<Void> add(@Validated(AddGroup.class) @RequestBody ChatModelBo bo) {
@@ -111,11 +128,24 @@ public class ChatModelController extends BaseController {
      * 修改模型管理
      */
     @SaCheckPermission("system:model:edit")
-    @Log(title = "模型管理", businessType = BusinessType.UPDATE)
+    @Log(title = "模型管理", businessType = BusinessType.UPDATE,
+        excludeParamNames = {"apiKey"})
     @RepeatSubmit()
     @PutMapping()
     public R<Void> edit(@Validated(EditGroup.class) @RequestBody ChatModelBo bo) {
         return toAjax(chatModelService.updateByBo(bo));
+    }
+
+    /**
+     * 按厂商批量更新密钥
+     */
+    @SaCheckPermission("system:model:edit")
+    @Log(title = "模型管理", businessType = BusinessType.UPDATE,
+        excludeParamNames = {"apiKey"})
+    @RepeatSubmit()
+    @PutMapping("/batchKeyByProvider")
+    public R<Void> batchKeyByProvider(@Validated @RequestBody ModelBatchKeyBo bo) {
+        return toAjax(chatModelService.updateApiKeyByProvider(bo.getProviderCode(), bo.getApiKey()));
     }
 
     /**

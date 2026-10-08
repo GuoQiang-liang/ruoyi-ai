@@ -1,8 +1,10 @@
 package org.ruoyi.common.sse.listener;
 
 import cn.hutool.core.collection.CollUtil;
+import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.ruoyi.common.sse.core.SseEmitterManager;
+import org.ruoyi.common.sse.dto.SseMessageDto;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -28,8 +30,19 @@ public class SseTopicListener implements ApplicationRunner, Ordered {
     @Override
     public void run(ApplicationArguments args) throws Exception {
         sseEmitterManager.subscribeMessage((message) -> {
-            log.info("SSE主题订阅收到消息session keys={} message={}", message.getUserIds(), message.getMessage());
-            // 如果key不为空就按照key发消息 如果为空就群发
+            log.info("{}", deliverySummary(message));
+            // 优先按会话路由（对话流式响应）
+            if (StrUtil.isNotBlank(message.getSessionId())) {
+                if (message.getEventDto() != null) {
+                    sseEmitterManager.sendEvent(message.getSessionId(), message.getEventDto());
+                } else if (message.getMessage() != null) {
+                    // 兼容按会话发纯文本的场景
+                    sseEmitterManager.sendEvent(message.getSessionId(),
+                        org.ruoyi.common.sse.dto.SseEventDto.content(message.getMessage()));
+                }
+                return;
+            }
+            // 否则按用户/群发路由（全局通知）
             if (CollUtil.isNotEmpty(message.getUserIds())) {
                 message.getUserIds().forEach(key -> {
                     sseEmitterManager.sendMessage(key, message.getMessage());
@@ -44,5 +57,45 @@ public class SseTopicListener implements ApplicationRunner, Ordered {
     @Override
     public int getOrder() {
         return -1;
+    }
+
+    static String deliverySummary(SseMessageDto message) {
+        if (message == null) {
+            return "sse_subscription status=RECEIVED routeType=UNKNOWN recipientCount=0 payloadChars=0 eventType=none";
+        }
+        String routeType;
+        int recipientCount;
+        if (StrUtil.isNotBlank(message.getSessionId())) {
+            routeType = "SESSION";
+            recipientCount = 1;
+        } else if (CollUtil.isNotEmpty(message.getUserIds())) {
+            routeType = "USER";
+            recipientCount = message.getUserIds().size();
+        } else {
+            routeType = "BROADCAST";
+            recipientCount = -1;
+        }
+        int payloadChars = textLength(message.getMessage());
+        String eventType = "none";
+        if (message.getEventDto() != null) {
+            payloadChars += textLength(message.getEventDto().getContent())
+                + textLength(message.getEventDto().getReasoningContent())
+                + textLength(message.getEventDto().getError());
+            String rawEventType = message.getEventDto().getEvent();
+            if (rawEventType != null) {
+                eventType = switch (rawEventType) {
+                    case "content", "reasoning", "done", "error", "mcp_tool", "message" -> rawEventType;
+                    default -> "custom";
+                };
+            }
+        }
+        return "sse_subscription status=RECEIVED routeType=" + routeType
+            + " recipientCount=" + recipientCount
+            + " payloadChars=" + payloadChars
+            + " eventType=" + eventType;
+    }
+
+    private static int textLength(String value) {
+        return value == null ? 0 : value.length();
     }
 }

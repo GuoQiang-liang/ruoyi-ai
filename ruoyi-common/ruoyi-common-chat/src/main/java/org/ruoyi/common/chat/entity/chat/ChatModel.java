@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.ToString;
 import org.ruoyi.common.tenant.core.TenantEntity;
 
 import java.io.Serial;
@@ -32,6 +33,9 @@ public class ChatModel extends TenantEntity {
      * 模型分类
      */
     private String category;
+
+    /** 默认模型优先级，数值越小越优先；同值按ID排序。 */
+    private Integer sortOrder;
 
     /**
      * 模型名称
@@ -67,6 +71,8 @@ public class ChatModel extends TenantEntity {
     /**
      * 密钥
      */
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private String apiKey;
 
     /**

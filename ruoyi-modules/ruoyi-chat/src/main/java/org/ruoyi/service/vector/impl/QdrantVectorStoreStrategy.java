@@ -8,6 +8,7 @@ import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.filter.Filter;
 import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import dev.langchain4j.store.embedding.qdrant.QdrantEmbeddingStore;
+import io.grpc.Status;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.QdrantGrpcClient;
 import io.qdrant.client.grpc.Collections.Distance;
@@ -84,7 +85,12 @@ public class QdrantVectorStoreStrategy extends AbstractVectorStoreStrategy {
     }
 
     private int getModelDimension(String modelName) {
-        return chatModelService.selectModelByName(modelName).getModelDimension();
+        var modelConfig = chatModelService.selectModelByName(modelName);
+        if (modelConfig == null || modelConfig.getModelDimension() == null) {
+            log.warn("无法解析模型 {} 的向量维度，使用默认值 1024", modelName);
+            return 1024;
+        }
+        return modelConfig.getModelDimension();
     }
 
     @Override
@@ -116,6 +122,7 @@ public class QdrantVectorStoreStrategy extends AbstractVectorStoreStrategy {
 
     @Override
     public void storeEmbeddings(StoreEmbeddingBo storeEmbeddingBo) {
+        createSchema(storeEmbeddingBo.getKid(), storeEmbeddingBo.getEmbeddingModelName());
         EmbeddingModel embeddingModel = getEmbeddingModel(storeEmbeddingBo.getEmbeddingModelName());
         List<String> chunkList = storeEmbeddingBo.getChunkList();
         List<String> fidList = storeEmbeddingBo.getFids();
@@ -128,20 +135,26 @@ public class QdrantVectorStoreStrategy extends AbstractVectorStoreStrategy {
         log.info("Qdrant向量存储条数记录: {}", chunkList.size());
         long startTime = System.currentTimeMillis();
 
-        IntStream.range(0, chunkList.size()).forEach(i -> {
+        List<TextSegment> segments = new ArrayList<>(chunkList.size());
+        for (int i = 0; i < chunkList.size(); i++) {
             String text = chunkList.get(i);
             String fid = fidList.get(i);
             Metadata metadata = new Metadata();
             metadata.put(METADATA_FID_KEY, fid);
             metadata.put(METADATA_KID_KEY, kid);
             metadata.put(METADATA_DOC_ID_KEY, docId);
-            TextSegment textSegment = TextSegment.from(text, metadata);
-            Embedding embedding = embeddingModel.embed(text).content();
+            segments.add(TextSegment.from(text, metadata));
+        }
+        List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
+        if (embeddings.size() != segments.size()) {
+            throw new ServiceException("Embedding 返回数量与分片数量不一致");
+        }
+        for (Embedding embedding : embeddings) {
             // 单位化处理
             float[] vector = embedding.vector();
             normalize(vector);
-            embeddingStore.add(Embedding.from(vector), textSegment);
-        });
+        }
+        embeddingStore.addAll(embeddings, segments);
 
         long endTime = System.currentTimeMillis();
         log.info("Qdrant向量存储完成消耗时间：{}秒", (endTime - startTime) / 1000);
@@ -227,6 +240,12 @@ public class QdrantVectorStoreStrategy extends AbstractVectorStoreStrategy {
                     docId = docIdValue.getStringValue();
                 }
 
+                String fid = null;
+                JsonWithInt.Value fidValue = point.getPayloadMap().get(METADATA_FID_KEY);
+                if (fidValue != null && fidValue.hasStringValue()) {
+                    fid = fidValue.getStringValue();
+                }
+
                 String sourceName = "未知来源";
                 if (docId != null) {
                     KnowledgeAttach attach = knowledgeAttachMapper.selectOne(new LambdaQueryWrapper<KnowledgeAttach>()
@@ -238,6 +257,8 @@ public class QdrantVectorStoreStrategy extends AbstractVectorStoreStrategy {
                 }
 
                 resultList.add(org.ruoyi.domain.vo.knowledge.KnowledgeRetrievalVo.builder()
+                        .id(fid)
+                        .docId(docId)
                         .content(content)
                         .score((double) point.getScore())
                         .sourceName(sourceName)
@@ -257,6 +278,10 @@ public class QdrantVectorStoreStrategy extends AbstractVectorStoreStrategy {
             client.deleteCollectionAsync(collectionName).get();
             log.info("Qdrant成功删除集合: {}", collectionName);
         } catch (Exception e) {
+            if (Status.fromThrowable(e).getCode() == Status.Code.NOT_FOUND) {
+                log.debug("Qdrant集合不存在，跳过删除: {}", collectionName);
+                return;
+            }
             log.error("Qdrant删除集合失败: {}", collectionName, e);
             throw new ServiceException("失败删除向量数据!");
         }
@@ -264,19 +289,28 @@ public class QdrantVectorStoreStrategy extends AbstractVectorStoreStrategy {
 
     @Override
     public void removeByDocId(String docId, String kid) {
-        String collectionName = vectorStoreProperties.getQdrant().getCollectionname() + kid;
-        EmbeddingStore<TextSegment> embeddingStore = getQdrantStore(collectionName);
-        Filter filter = MetadataFilterBuilder.metadataKey(METADATA_DOC_ID_KEY).isEqualTo(docId);
-        embeddingStore.removeAll(filter);
-        log.info("Qdrant成功删除 docId={} 的所有向量数据", docId);
+        removeByMetadata(kid, METADATA_DOC_ID_KEY, docId);
     }
 
     @Override
     public void removeByFid(String fid, String kid) {
+        removeByMetadata(kid, METADATA_FID_KEY, fid);
+    }
+
+    private void removeByMetadata(String kid, String metadataKey, String value) {
         String collectionName = vectorStoreProperties.getQdrant().getCollectionname() + kid;
         EmbeddingStore<TextSegment> embeddingStore = getQdrantStore(collectionName);
-        Filter filter = MetadataFilterBuilder.metadataKey(METADATA_FID_KEY).isEqualTo(fid);
-        embeddingStore.removeAll(filter);
-        log.info("Qdrant成功删除 fid={} 的所有向量数据", fid);
+        Filter filter = MetadataFilterBuilder.metadataKey(metadataKey).isEqualTo(value);
+        try {
+            embeddingStore.removeAll(filter);
+            log.info("Qdrant成功删除 {}={} 的所有向量数据", metadataKey, value);
+        } catch (RuntimeException e) {
+            // 首次上传会先清理旧向量，此时集合尚未创建；SDK 会将 gRPC 状态包装在异常链中。
+            if (Status.fromThrowable(e).getCode() == Status.Code.NOT_FOUND) {
+                log.debug("Qdrant集合不存在，跳过删除: {}", collectionName);
+                return;
+            }
+            throw e;
+        }
     }
 }

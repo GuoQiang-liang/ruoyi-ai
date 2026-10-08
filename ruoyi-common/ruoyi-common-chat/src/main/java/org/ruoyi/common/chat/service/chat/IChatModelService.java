@@ -49,6 +49,9 @@ public interface IChatModelService {
      */
     List<ChatModelVo> queryList(ChatModelBo bo);
 
+    /** 查询当前租户中厂商已启用的模型，供用户选择或业务调用。 */
+    List<ChatModelVo> queryAvailableList(ChatModelBo bo);
+
     /**
      * 新增模型管理
      *
@@ -73,4 +76,13 @@ public interface IChatModelService {
      * @return 是否删除成功
      */
     Boolean deleteWithValidByIds(Collection<Long> ids, Boolean isValid);
+
+    /**
+     * 按厂商批量更新密钥
+     *
+     * @param providerCode 厂商编码
+     * @param apiKey       密钥
+     * @return 是否更新成功
+     */
+    Boolean updateApiKeyByProvider(String providerCode, String apiKey);
 }

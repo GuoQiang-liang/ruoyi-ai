@@ -1,10 +1,14 @@
 package org.ruoyi.common.chat.domain.bo.chat;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.github.linpeilie.annotations.AutoMapper;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.ToString;
 import org.ruoyi.common.chat.entity.chat.ChatModel;
+import org.ruoyi.common.core.validate.AddGroup;
 import org.ruoyi.common.core.validate.EditGroup;
 import org.ruoyi.common.mybatis.core.domain.BaseEntity;
 
@@ -28,16 +32,22 @@ public class ChatModelBo extends BaseEntity {
     /**
      * 模型分类
      */
+    @NotBlank(message = "模型分类不能为空", groups = { AddGroup.class, EditGroup.class })
     private String category;
+
+    /** 默认模型优先级，数值越小越优先；同值按ID排序。 */
+    private Integer sortOrder;
 
     /**
      * 模型名称
      */
+    @NotBlank(message = "模型名称不能为空", groups = { AddGroup.class, EditGroup.class })
     private String modelName;
 
     /**
      * 模型供应商
      */
+    @NotBlank(message = "模型供应商不能为空", groups = { AddGroup.class, EditGroup.class })
     private String providerCode;
 
     /**
@@ -63,6 +73,9 @@ public class ChatModelBo extends BaseEntity {
     /**
      * 密钥
      */
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private String apiKey;
 
     /**

@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Component("siliconflowRerank")
+@org.springframework.context.annotation.Scope("prototype")
 public class SiliconFlowRerankModelService implements RerankModelService {
 
     private static final String DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1/rerank";
@@ -58,7 +59,8 @@ public class SiliconFlowRerankModelService implements RerankModelService {
             RequestBody body = RequestBody.create(requestJson, MediaType.get("application/json"));
             Request httpRequest = new Request.Builder()
                     .url(url)
-                    .addHeader("Authorization", "Bearer " + chatModelVo.getApiKey())
+                    .addHeader("Authorization", "Bearer "
+                        + chatModelVo.getApiKey())
                     .addHeader("Content-Type", "application/json")
                     .post(body)
                     .build();
