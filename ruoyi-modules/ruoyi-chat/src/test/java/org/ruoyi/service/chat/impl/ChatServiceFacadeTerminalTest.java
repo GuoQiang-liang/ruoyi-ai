@@ -22,7 +22,10 @@ class ChatServiceFacadeTerminalTest {
     @BeforeAll static void initializeSseUtility() {
         var context = new GenericApplicationContext();
         context.registerBean(SseEmitterManager.class, () -> mock(SseEmitterManager.class));
-        context.refresh(); new SpringUtil().setApplicationContext(context);
+        context.refresh();
+        var springUtil = new SpringUtil();
+        springUtil.setApplicationContext(context);
+        springUtil.postProcessBeanFactory(context.getBeanFactory());
     }
 
     @Test void timeoutPersistsPartialFailureAndSendsOneTerminalEvenWithLateCallbacks() {
